@@ -1,0 +1,13 @@
+[
+  {
+    "Name": "McKinsey L4 - Solaris Theoretical Assessment",
+    "Language": "English",
+    "BaseURL": "https://github.com/CloudLabsAI/Mck-Assessments",
+    "Files": [
+      {
+        "RawFilePath": "https://docs-api.cloudlabs.ai/repos/raw.githubusercontent.com/Raghavendra-spektra/McKinsey/refs/heads/main/L4-Solaris-Theory/lab-guide/lab-guide.md",
+        "Order": 1
+      }
+    ]
+  }
+]
