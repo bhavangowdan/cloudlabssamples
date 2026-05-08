@@ -1,0 +1,172 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "vmName": { "type": "string" },
+    "adminUsername": { "type": "string" },
+    "adminPassword": { "type": "secureString" }
+  },
+  "variables": {
+    "vnetName": "vnet-broken",
+    "subnetName": "snet-broken",
+    "nsgName": "nsg-broken",
+    "pipName": "pip-broken01",
+    "nicName": "[concat(parameters('vmName'), '-nic')]",
+    "location": "[resourceGroup().location]"
+  },
+  "resources": [
+    
+    {
+      "type": "Microsoft.Network/networkSecurityGroups",
+      "apiVersion": "2023-09-01",
+      "name": "[variables('nsgName')]",
+      "location": "[resourceGroup().location]",
+      "properties": {
+        "securityRules": [
+          {
+            "name": "deny-all-inbound",
+            "properties": {
+              "priority": 100,
+              "access": "Deny",
+              "direction": "Inbound",
+              "protocol": "*",
+              "sourceAddressPrefix": "*",
+              "destinationAddressPrefix": "*",
+              "sourcePortRange": "*",
+              "destinationPortRange": "*"
+            }
+          },
+          {
+            "name": "allow-rdp",
+            "properties": {
+              "priority": 200,
+              "access": "Allow",
+              "direction": "Inbound",
+              "protocol": "Tcp",
+              "sourceAddressPrefix": "*",
+              "destinationAddressPrefix": "*",
+              "sourcePortRange": "*",
+              "destinationPortRange": "3389"
+            }
+          }
+        ]
+      }
+    },
+
+    {
+      "type": "Microsoft.Network/virtualNetworks",
+      "apiVersion": "2023-09-01",
+      "name": "[variables('vnetName')]",
+      "location": "[resourceGroup().location]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/networkSecurityGroups', variables('nsgName'))]"
+      ],
+      "properties": {
+        "addressSpace": {
+          "addressPrefixes": ["10.30.0.0/16"]
+        },
+        "subnets": [
+          {
+            "name": "[variables('subnetName')]",
+            "properties": {
+              "addressPrefix": "10.30.1.0/24",
+              "networkSecurityGroup": {
+                "id": "[resourceId('Microsoft.Network/networkSecurityGroups', variables('nsgName'))]"
+              }
+            }
+          }
+        ]
+      }
+    },
+
+    {
+      "type": "Microsoft.Network/publicIPAddresses",
+      "apiVersion": "2023-09-01",
+      "name": "[variables('pipName')]",
+      "location": "[resourceGroup().location]",
+      "sku": { "name": "Standard" },
+      "properties": {
+        "publicIPAllocationMethod": "Static"
+      }
+    },
+
+    {
+      "type": "Microsoft.Network/networkInterfaces",
+      "apiVersion": "2023-09-01",
+      "name": "[variables('nicName')]",
+      "location": "[resourceGroup().location]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]"
+      ],
+      "properties": {
+        "ipConfigurations": [
+          {
+            "name": "ipconfig1",
+            "properties": {
+              "subnet": {
+                "id": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('vnetName'), variables('subnetName'))]"
+              }
+            }
+          }
+        ]
+      }
+    },
+
+    {
+      "type": "Microsoft.Compute/virtualMachines",
+      "apiVersion": "2023-09-01",
+      "name": "[parameters('vmName')]",
+      "location": "[resourceGroup().location]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/networkInterfaces', variables('nicName'))]"
+      ],
+      "properties": {
+        "hardwareProfile": {
+          "vmSize": "Standard_D2s_v3"
+        },
+        "osProfile": {
+          "computerName": "[parameters('vmName')]",
+          "adminUsername": "[parameters('adminUsername')]",
+          "adminPassword": "[parameters('adminPassword')]"
+        },
+        "storageProfile": {
+          "imageReference": {
+            "publisher": "MicrosoftWindowsServer",
+            "offer": "WindowsServer",
+            "sku": "2022-datacenter-azure-edition",
+            "version": "latest"
+          },
+          "osDisk": {
+            "createOption": "FromImage"
+          }
+        },
+        "networkProfile": {
+          "networkInterfaces": [
+            {
+              "id": "[resourceId('Microsoft.Network/networkInterfaces', variables('nicName'))]"
+            }
+          ]
+        }
+      }
+    },
+
+    {
+      "type": "Microsoft.Compute/virtualMachines/extensions",
+      "apiVersion": "2023-09-01",
+      "name": "[concat(parameters('vmName'), '/customScript')]",
+      "location": "[resourceGroup().location]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]"
+      ],
+      "properties": {
+        "publisher": "Microsoft.Compute",
+        "type": "CustomScriptExtension",
+        "typeHandlerVersion": "1.10",
+        "settings": {
+          "commandToExecute": "powershell -Command \"New-NetFirewallRule -DisplayName BLOCK-8080-INBOUND-DEMO -Direction Inbound -Protocol TCP -LocalPort 8080 -Action Block; Install-WindowsFeature Web-Server; New-WebSite -Name App8080 -Port 8080 -PhysicalPath C:\\inetpub\\wwwroot\""
+        }
+      }
+    }
+
+  ]
+}

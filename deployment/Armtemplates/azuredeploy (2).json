@@ -1,0 +1,225 @@
+{
+    "$schema": "http://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "adminUsername": { "type": "String" },
+        "adminPassword": { "type": "SecureString" },
+        "AzureUserName": { "type": "String" },
+        "AzurePassword": { "type": "SecureString" },
+        "ODLID": { "type": "String" },
+        "DeploymentID": { "type": "String" },
+        "trainerUserName": { "type": "String" },
+        "trainerUserPassword": { "type": "String" }
+    },
+    "variables": {
+        "linuxSetupArgs": "[concat(' -azure_user ', parameters('AzureUserName'), ' -azure_password ', parameters('AzurePassword'), ' -odl_id ', parameters('ODLID'), ' -deployment_id ', parameters('DeploymentID'), ' -admin_user ', parameters('adminUsername'), ' -trainer_user ', parameters('trainerUserName'), ' -trainer_password ', parameters('trainerUserPassword'))]",
+        "AzureSubscriptionID": "[subscription().subscriptionId]",
+        "AzureTenantID": "[subscription().tenantId]",
+        "location": "[resourceGroup().location]",
+        "linuxVmName": "[concat('VM-', parameters('DeploymentID'))]",
+        "networkInterfaceName": "[concat(variables('linuxVmName'), '-nic')]",
+        "publicIpAddressName": "[concat('dockervmip', uniqueString(resourceGroup().id))]",
+        "networkSecurityGroupName": "nsg",
+        "virtualNetworkName": "vnet",
+        "vnetID": "[resourceId('Microsoft.Network/virtualNetworks', variables('virtualNetworkName'))]",
+        "subnetRef": "[concat(variables('vnetID'),'/subnets/','subnet')]",
+        "setupScriptUrl": "https://stracc0705.blob.core.windows.net/task/setup-jumpvm.sh",
+        "seedScriptUrl": "https://stracc0705.blob.core.windows.net/task/seed-state.sh"
+    },
+    "resources": [
+        {
+            "type": "Microsoft.Compute/virtualMachines",
+            "apiVersion": "2024-11-01",
+            "name": "[variables('linuxVmName')]",
+            "location": "[resourceGroup().location]",
+            "dependsOn": [
+                "[concat('Microsoft.Network/networkInterfaces/', variables('networkInterfaceName'))]"
+            ],
+            "properties": {
+                "osProfile": {
+                    "computerName": "[variables('linuxVmName')]",
+                    "adminUsername": "[parameters('adminUsername')]",
+                    "adminPassword": "[parameters('adminPassword')]",
+                    "linuxConfiguration": {
+                        "disablePasswordAuthentication": false,
+                        "provisionVMAgent": true
+                    }
+                },
+                "hardwareProfile": { "vmSize": "Standard_D2s_v5" },
+                "storageProfile": {
+                    "imageReference": {
+                        "publisher": "Canonical",
+                        "offer": "0001-com-ubuntu-server-jammy",
+                        "sku": "22_04-lts-gen2",
+                        "version": "latest"
+                    },
+                    "osDisk": {
+                        "createOption": "fromImage",
+                        "diskSizeGB": 64,
+                        "managedDisk": { "storageAccountType": "Standard_LRS" }
+                    },
+                    "dataDisks": []
+                },
+                "networkProfile": {
+                    "networkInterfaces": [
+                        { "id": "[resourceId('Microsoft.Network/networkInterfaces', variables('networkInterfaceName'))]" }
+                    ]
+                }
+            },
+            "resources": [
+                {
+                    "type": "extensions",
+                    "apiVersion": "2024-11-01",
+                    "name": "linuxCustomScript",
+                    "location": "[resourceGroup().location]",
+                    "dependsOn": [
+                        "[concat('Microsoft.Compute/virtualMachines/', variables('linuxVmName'))]"
+                    ],
+                    "properties": {
+                        "publisher": "Microsoft.Azure.Extensions",
+                        "type": "CustomScript",
+                        "typeHandlerVersion": "2.1",
+                        "autoUpgradeMinorVersion": true,
+                        "settings": {
+                            "fileUris": [
+                                "[variables('setupScriptUrl')]",
+                                "[variables('seedScriptUrl')]"
+                            ]
+                        },
+                        "protectedSettings": {
+                            "commandToExecute": "[concat('bash setup-jumpvm.sh', variables('linuxSetupArgs'))]"
+                        }
+                    }
+                }
+            ]
+        },
+        {
+            "type": "Microsoft.Network/virtualNetworks",
+            "apiVersion": "2024-05-01",
+            "name": "[variables('virtualNetworkName')]",
+            "location": "[resourceGroup().location]",
+            "properties": {
+                "addressSpace": { "addressPrefixes": [ "10.20.0.0/16" ] },
+                "subnets": [ { "name": "subnet", "properties": { "addressPrefix": "10.20.0.0/24" } } ]
+            }
+        },
+        {
+            "type": "Microsoft.Network/networkInterfaces",
+            "apiVersion": "2024-05-01",
+            "name": "[variables('networkInterfaceName')]",
+            "location": "[resourceGroup().location]",
+            "dependsOn": [
+                "[concat('Microsoft.Network/virtualNetworks/', variables('virtualNetworkName'))]",
+                "[concat('Microsoft.Network/publicIpAddresses/', variables('publicIpAddressName'))]",
+                "[concat('Microsoft.Network/networkSecurityGroups/', variables('networkSecurityGroupName'))]"
+            ],
+            "properties": {
+                "ipConfigurations": [
+                    {
+                        "name": "ipconfig1",
+                        "properties": {
+                            "subnet": { "id": "[variables('subnetRef')]" },
+                            "privateIPAllocationMethod": "Dynamic",
+                            "publicIpAddress": {
+                                "id": "[resourceId('Microsoft.Network/publicIpAddresses', variables('publicIpAddressName'))]"
+                            }
+                        }
+                    }
+                ],
+                "networkSecurityGroup": {
+                    "id": "[resourceId('Microsoft.Network/networkSecurityGroups', variables('networkSecurityGroupName'))]"
+                }
+            }
+        },
+        {
+            "type": "Microsoft.Network/publicIPAddresses",
+            "apiVersion": "2024-05-01",
+            "name": "[variables('publicIpAddressName')]",
+            "location": "[resourceGroup().location]",
+            "tags": { "displayName": "Docker Jump VM Public IP" },
+            "sku": { "name": "Standard" },
+            "properties": {
+                "publicIPAllocationMethod": "Static",
+                "dnsSettings": { "domainNameLabel": "[variables('publicIpAddressName')]" }
+            }
+        },
+        {
+            "type": "Microsoft.Network/networkSecurityGroups",
+            "apiVersion": "2024-05-01",
+            "name": "[variables('networkSecurityGroupName')]",
+            "location": "[resourceGroup().location]",
+            "properties": {
+                "securityRules": [
+                    {
+                        "name": "default-allow-ssh",
+                        "properties": {
+                            "priority": 1000,
+                            "protocol": "TCP",
+                            "access": "Allow",
+                            "direction": "Inbound",
+                            "sourceAddressPrefix": "*",
+                            "sourcePortRange": "*",
+                            "destinationAddressPrefix": "*",
+                            "destinationPortRange": "22"
+                        }
+                    },
+                    {
+                        "name": "allow-app-8080",
+                        "properties": {
+                            "priority": 1100,
+                            "protocol": "TCP",
+                            "access": "Allow",
+                            "direction": "Inbound",
+                            "sourceAddressPrefix": "*",
+                            "sourcePortRange": "*",
+                            "destinationAddressPrefix": "*",
+                            "destinationPortRange": "8080"
+                        }
+                    },
+                    {
+                        "name": "allow-app-9090",
+                        "properties": {
+                            "priority": 1200,
+                            "protocol": "TCP",
+                            "access": "Allow",
+                            "direction": "Inbound",
+                            "sourceAddressPrefix": "*",
+                            "sourcePortRange": "*",
+                            "destinationAddressPrefix": "*",
+                            "destinationPortRange": "9090"
+                        }
+                    }
+                ]
+            }
+        }
+    ],
+    "outputs": {
+        "DeploymentID": { "type": "String", "value": "[parameters('DeploymentID')]" },
+        "region": { "type": "string", "value": "[variables('location')]" },
+        "VM Admin Username": { "type": "String", "value": "[parameters('adminUsername')]" },
+        "VM Admin Password": { "type": "String", "value": "[parameters('adminPassword')]" },
+        "Linux VM Public IP": {
+            "type": "String",
+            "value": "[reference(resourceId('Microsoft.Network/publicIPAddresses', variables('publicIpAddressName'))).ipAddress]"
+        },
+        "Linux VM DNS Name": {
+            "type": "String",
+            "value": "[reference(resourceId('Microsoft.Network/publicIPAddresses', variables('publicIpAddressName'))).dnsSettings.fqdn]"
+        },
+        "SSH Command": {
+            "type": "String",
+            "value": "[concat('ssh ', parameters('adminUsername'), '@', reference(resourceId('Microsoft.Network/publicIPAddresses', variables('publicIpAddressName'))).dnsSettings.fqdn)]"
+        },
+        "Local Registry URL": {
+            "type": "String",
+            "value": "localhost:5000"
+        },
+        "Sample App Path": {
+            "type": "String",
+            "value": "/home/labuser/app"
+        },
+        "Trainer Username": { "type": "String", "value": "[parameters('trainerUserName')]" },
+        "Trainer Password": { "type": "String", "value": "[parameters('trainerUserPassword')]" },
+        "VM Resource Name": { "type": "String", "value": "[variables('linuxVmName')]" }
+    }
+}
